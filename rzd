@@ -1,0 +1,307 @@
+library(data.table)
+library(readxl)
+
+#грузим данные
+
+l=fread("C:/Users/admin/export.csv",sep=",",dec=".")
+
+
+n=fread("C:/Users/admin/NA.csv",sep=",",dec=".")
+
+str(n)
+str(l)
+l$ID_POM<-NULL
+a=fread("C:/Users/admin/work.csv",sep=";",dec=".")
+
+str(a)
+a$PRIZNAK<-NULL
+a$DATE_CREATE<-NULL
+a$DATE_PRIB<-NULL
+a$USER_CREATE<-NULL
+a$DATE_MOD <-NULL
+a$DATE_UB <-NULL
+a$USER_MOD <-NULL
+a$NUMBER_COLUMN <-NULL
+a$CLASS <-NULL
+a$POST_DATE <-NULL
+a$ID_OLD <-NULL
+a$ID_DEPO <-NULL
+a$KOD_DOR <-NULL
+a$DATE_ZAK <-NULL
+b=fread("C:/Users/admin/classnar.csv",sep=",",dec=".")[, .(ID_SP_NAR, NAME)]
+#View(b)
+gc()
+
+
+#rename data
+dt=l
+str(l)
+nar=n
+str(nar)
+classnar=b
+#View(classnar)
+str(classnar)
+work=a
+str(n)
+
+
+
+dt[, `:=`(DATE_POEZDKI = as.POSIXct(DATE_POEZDKI, 
+                                    format = "%Y-%m-%d %H:%M:%S",
+                                    optional = TRUE),
+          WORK_TIME = as.POSIXct(WORK_TIME, 
+                                 format = "%Y-%m-%d %H:%M:%S",
+                                 optional = TRUE))]
+# Отбираем данные за январь 2016
+'date_start <- as.POSIXct("2016-01-01 00:00:00", 
+                         format = "%Y-%m-%d %H:%M:%S")
+date_end <- as.POSIXct("2016-02-01 00:00:00", 
+                       format = "%Y-%m-%d %H:%M:%S")
+dt <- dt[DATE_POEZDKI >= date_start & DATE_POEZDKI < date_end, ]'
+dt$ID_POM<-NULL
+
+
+str(nar)
+
+# Полный список нарушений ID_SP_NAR - 624 шт.
+ID_SP_NAR <- unique(classnar$ID_SP_NAR)
+# Полный список машинистов
+ID_MASH <- unique(dt$ID_MASH)
+# Таблица со всеми комбинациями машинистов и нарушений
+mash_nar <- CJ(ID_MASH, ID_SP_NAR)
+
+
+# Используемые коды нарушений
+# codes <- read_xlsx("data/nar.xlsx", 
+#                    sheet = 2, 
+#                    col_names = c("KOD", "NAME"))
+# setDT(codes)
+
+if (!dir.exists("output")) dir.create("output")
+
+
+# Задаем правильный тип для даты и даты-времени
+nar[, DATE_POEZDKI := as.POSIXct(DATE_POEZDKI, 
+                                 format = "%Y-%m-%d %H:%M:%S",
+                                 optional = TRUE)]
+
+nar$ID_NAR<-NULL
+nar$ID_SKL<-NULL
+str(nar)
+str(dt)
+#nar=unique(nar)
+#View(nar)
+#dt=merge(dt,nar, by=c("KOD_DEPO","DATE_POEZDKI","))
+dt <- nar[dt, on = .(DATE_POEZDKI, KOD_DEPO,KOD_DOR), mult = "first"]
+#mydata=merge(x, y, by =c("ClientID", "EmailMessageId"))
+rm(nar)
+dt$ID_SKL<-NULL
+
+library("sqldf")
+#test=sqldf("select * from dt where ID_MASH= 17060076 and KOD_DOR=28")
+#View(test)
+
+# Убираем лишние пробелы в KOD_NAR
+dt[, KOD_NAR := gsub(pattern = "\\s", replacement = "", KOD_NAR)]
+# Коды из lentNAR.csv, которые есть в nar.xlsx
+# codes_to_use <- intersect(dt[, unique(KOD_NAR)], codes[, KOD])
+# Отбираем только нарушения из списка codes_to_use, а также NA
+# dt <- dt[KOD_NAR %in% codes_to_use | is.na(KOD_NAR), ]
+
+
+dt <- classnar[dt, on = "ID_SP_NAR"]
+str(dt)
+
+#страховка
+e=dt
+v=dt
+v$KOD_NAR<-NULL
+#v$DATE_NAR<-NULL
+#v$DATE_POEZDKI<-NULL
+#найти дублирующиеся ID_SP_NAR
+'w=v[, .N, by = .(ID_MASH, KOD_DEPO,COLUMN_MASH,ID_SP_NAR,KOD_DOR)]
+w=na.omit(w)
+View(w)'
+#v=unique(v)
+#View(v)
+
+
+
+dt=v
+# Количество поездок для каждой комбинации машинист-депо-колонна-дорога 
+# по датам
+dt[, n_routes_total := uniqueN(DATE_POEZDKI), 
+   by = .(ID_MASH,  KOD_DEPO, KOD_DOR,COLUMN_MASH)]
+str(dt)
+#View(dt[, n_routes_total])
+# Количество нарушений каждого вида по комбинациям 
+# машинист-депо-колонна-дорога за каждую дату (каждую поездку)
+dt2=dt
+#View(dt2)
+
+
+
+dt2$DATE_NAR<-NULL
+dt2$DATE_POEZDKI<-NULL
+dt2$KOD_NAR<-NULL
+dt2=unique(dt2)
+View(dt2)
+str(dt2)
+dt2$TIME_OTPR<-NULL
+dt2$TIME_PRIB<-NULL
+dt2$WORK_TIME<-NULL
+dt2$KOL_NAR<-NULL
+dt2$NAME<-NULL
+
+
+dt2[, 
+    n_violations := .SD[!is.na(ID_SP_NAR) & ID_SP_NAR != "", .N], 
+    by = .(ID_MASH, KOD_DEPO,  KOD_DOR,COLUMN_MASH)]
+str(dt2)
+
+# Индикатор того, что поездка была с нарушением каждого вида
+dt2[, is_violation := ifelse(n_violations >= 1, 1, 0)]
+
+
+#test1=sqldf("select * from dt2 where ID_MASH= 17060076 and KOD_DOR=28")
+#View(test1)
+
+# Вероятности поездок с нарушениями по комбинациям
+# машиниста-депо-колонна-дорога
+dt2[, prop_violations := sum(is_violation)/n_routes_total,
+   by = .(ID_MASH, KOD_DEPO, COLUMN_MASH, KOD_DOR)]
+
+
+prop_violations <- unique(dt2)[, .(KOD_DEPO,  KOD_DOR,COLUMN_MASH,
+                                   ID_MASH, ID_SP_NAR, prop_violations)]
+
+# Средние вероятности нарушений каждого вида (усредняем значения 
+# для комбинаций машиниста-депо-колонна-дорога)
+prop_violations[, 
+                mean_prop := mean(prop_violations, na.rm = TRUE), 
+                by = ID_SP_NAR]
+
+# Функция для выставления оценок комбинациям машиниста-депо-колонна
+# Если вероятность выше среднего более чем на 20% - 2,
+# если вероятность выше среднего на 20% или менее - 1,
+# если вероятность ниже или равна среднему - 0
+score_mash <- function(prop, ref_prop) {
+  ifelse(prop / ref_prop > 1.2,
+         2,
+         ifelse(prop / ref_prop > 1, 
+                1, 
+                0)
+  )
+}
+
+# Проверка
+'score_mash(prop_violations[ID_MASH == 51014401, prop_violations], 
+           prop_violations[ID_MASH == 51014401, mean_prop])'
+
+prop_violations[, 
+                mash_score := score_mash(prop_violations, mean_prop)]
+
+
+
+library(dplyr)
+prop_violations=select(prop_violations,ID_MASH,
+                       ID_SP_NAR,
+                       KOD_DOR,
+                       KOD_DEPO,
+                       COLUMN_MASH,
+                       prop_violations,mash_score
+             )
+View(prop_violations)
+str(prop_violations)
+prop_violations$prop_violations=as.factor(prop_violations$prop_violations)
+library(tidyverse)
+ert=prop_violations %>% 
+  mutate_if(is.factor, as.character) %>%
+  complete(ID_MASH, ID_SP_NAR = classnar$ID_SP_NAR,
+           fill = list(prop_violations = '0', mash_score = 0)) %>%
+  fill(3:4)
+
+#View(ert)
+
+#test3=sqldf("select * from tt where  KOD_DOR=28")
+#View(test3)
+
+colnames(ert)[1] <- "ID_WORKES"
+
+tt=merge(work,ert,by="ID_WORKES")
+#View(tt)
+#####################################################
+#Заполним нулями депо и код дороги там где нет нарушений
+tt=tt[is.na(mash_score), mash_score := 0]
+tt=tt[is.na(KOD_DEPO), KOD_DEPO  := 0]
+tt=tt[is.na(KOD_DOR), KOD_DOR  := 0]
+tt=tt[is.na(COLUMN_MASH), COLUMN_MASH  := 0]
+
+
+
+mydata=tt
+#View(mydata)
+
+
+library(data.table)
+setDT(mydata)
+setDT(dt2)
+vars2update <- c("KOD_DEPO", "KOD_DOR","COLUMN_MASH")
+rows2update <- mydata[, rowSums(.SD == 0L) == 2L, .SDcols = vars2update]
+
+# Join and update variables
+ss=mydata[rows2update, 
+       (vars2update) := dt2[.SD, 
+                                on = .(ID_MASH = ID_WORKES), 
+                                mult = "last", 
+                                mget(vars2update)]]
+
+
+
+# для коллоны машинистов
+
+
+wert=unique(ss)
+library(dplyr)
+wert1=wert %>%
+  group_by(ID_WORKES) %>%
+  mutate(COLUMN_MASH = last(COLUMN_MASH[COLUMN_MASH != 0]))
+#View(wert1)
+
+
+wert2=wert1 %>%
+  group_by(ID_WORKES) %>%
+  mutate(KOD_DOR = last(KOD_DOR[KOD_DOR != 0]))
+#View(wert2)
+str(wert2)
+
+
+wert3=wert2 %>%
+  group_by(ID_WORKES) %>%
+  mutate(KOD_DEPO = last(KOD_DEPO[KOD_DEPO != 0]))
+
+str(wert3)
+write.csv(wert3,"fullutf8.csv")
+wert3=fread("fullutf8.csv",sep=",",dec=".")
+#str(wert3$prop_violations)
+
+
+
+setDT(wert3)
+wert3=wert3[, {
+  if(any(mash_score)>0) {
+    i <- which(mash_score>0)[1L]
+    .(prop_violations=prop_violations[i], mash_score=mash_score[i])
+  } else 
+    .(prop_violations=mean(prop_violations), mash_score=mash_score[1L])
+}, 
+.(ID_WORKES, TABL_NOM, NAME, ASUTRID, KOD_DOR, KOD_DEPO,COLUMN_MASH, ID_SP_NAR)]
+str(wert3)
+wert3$prop_violations=round(wert3$prop_violations, digits = 3)
+rb=fread("C:/Users/admin/Documents/rb.csv",sep=";",dec=".")
+str(rb)
+wert3=merge(wert3,rb,by="ID_SP_NAR")
+write.csv(wert3,"fullutf8.csv",fileEncoding="UTF-8")
+str(wert3)
+
+
